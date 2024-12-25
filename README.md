@@ -1,0 +1,2 @@
+# Shutter
+Shutter.exe
