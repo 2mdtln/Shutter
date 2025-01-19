@@ -1,41 +1,109 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
+	"log"
+	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
+
+	"golang.org/x/sys/windows/svc"
 )
 
-func main() {
-	// Kapama saati (saat:dakika)
-	shutdownHour := 20
-	shutdownMinute := 00
+type shutdownService struct {
+	shutdownHour   int
+	shutdownMinute int
+}
 
-	fmt.Printf("Bilgisayar %02d:%02d'de kapatılacak.\n", shutdownHour, shutdownMinute)
+type Config struct {
+	ShutdownTime string `json:"shutdown_time"`
+}
 
-	// Şu anki zaman
-	now := time.Now()g
-	shutdownTime := time.Date(now.Year(), now.Month(), now.Day(), shutdownHour, shutdownMinute, 0, 0, now.Location())
+const defaultShutdownTime = "17:40"
 
-	// Şu anki zaman ile kapatma zamanı arasındaki süre (Biraz hatalı)
-	durationUntilShutdown := shutdownTime.Sub(now)
-
-	if durationUntilShutdown > 0 {
-		fmt.Printf("Kapatmaya kadar %v süre kaldı...\n", durationUntilShutdown)
-		time.Sleep(durationUntilShutdown)
-	} else {
-		fmt.Println("Kapatma zamanı geçti!")
-		return
-	}
-
-	// SH4TT3R
-	cmd := exec.Command("shutdown", "/s", "/t", "0")
-	err := cmd.Run()
+func loadConfig() string {
+	file, err := os.Open("config.json")
 	if err != nil {
-		fmt.Printf("Kapatma komutu çalıştırılamadı: %s\n", err)
+		return defaultShutdownTime
+	}
+	defer file.Close()
+
+	var config Config
+	if json.NewDecoder(file).Decode(&config) != nil || config.ShutdownTime == "" {
+		return defaultShutdownTime
+	}
+
+	return config.ShutdownTime
+}
+
+func (s *shutdownService) Execute(args []string, r <-chan svc.ChangeRequest, statusChan chan<- svc.Status) (bool, uint32) {
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+	statusChan <- svc.Status{State: svc.StartPending}
+
+	log.Println("Service is starting...")
+	statusChan <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
+
+	for {
+		select {
+		case changeRequest := <-r:
+			switch changeRequest.Cmd {
+			case svc.Interrogate:
+				statusChan <- changeRequest.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				log.Println("Service is stopping...")
+				statusChan <- svc.Status{State: svc.StopPending}
+				return false, 0
+			default:
+				log.Printf("Unexpected control request: %v", changeRequest.Cmd)
+			}
+		default:
+			if s.shouldShutdown() {
+				exec.Command("shutdown", "/s", "/t", "0").Run()
+			}
+			time.Sleep(1 * time.Minute)
+		}
+	}
+}
+
+func (s *shutdownService) shouldShutdown() bool {
+	now := time.Now()
+	return now.Hour() == s.shutdownHour && now.Minute() == s.shutdownMinute
+}
+
+func main() {
+	isService, err := svc.IsWindowsService()
+	if err != nil {
+		log.Fatalf("serviceERR: %v", err)
+	}
+
+	shutdownTime := loadConfig()
+	shutdownHour, shutdownMinute := parseShutdownTime(shutdownTime)
+
+	if isService {
+		svc.Run("ShutdownService", &shutdownService{shutdownHour, shutdownMinute})
 		return
 	}
 
-	fmt.Println("Bilgisayar kapatılacak...")
+	log.Println("DMode: Service is not running.")
+}
 
+func parseShutdownTime(timeStr string) (int, int) {
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
+		log.Fatalf("Invalid time format.")
+	}
+
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		log.Fatalf("Invalid hour")
+	}
+
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
+		log.Fatalf("Invalid minute")
+	}
+
+	return hour, minute
 }
