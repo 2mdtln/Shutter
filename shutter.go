@@ -1,3 +1,16 @@
+// ╔──────────────────────────────────────────────────────────────╗
+// │                                                              │
+// │   ██████  ██░ ██  █    ██ ▄▄▄█████▓▄▄▄█████▓▓█████  ██▀███   │
+// │ ▒██    ▒ ▓██░ ██▒ ██  ▓██▒▓  ██▒ ▓▒▓  ██▒ ▓▒▓█   ▀ ▓██ ▒ ██▒ │
+// │ ░ ▓██▄   ▒██▀▀██░▓██  ▒██░▒ ▓██░ ▒░▒ ▓██░ ▒░▒███   ▓██ ░▄█ ▒ │
+// │   ▒   ██▒░▓█ ░██ ▓▓█  ░██░░ ▓██▓ ░ ░ ▓██▓ ░ ▒▓█  ▄ ▒██▀▀█▄   │
+// │ ▒██████▒▒░▓█▒░██▓▒▒█████▓   ▒██▒ ░   ▒██▒ ░ ░▒████▒░██▓ ▒██▒ │
+// │ ▒ ▒▓▒ ▒ ░ ▒ ░░▒░▒░▒▓▒ ▒ ▒   ▒ ░░     ▒ ░░   ░░ ▒░ ░░ ▒▓ ░▒▓░ │
+// │ ░ ░▒  ░ ░ ▒ ░▒░ ░░░▒░ ░ ░     ░        ░     ░ ░  ░  ░▒ ░ ▒░ │
+// │ ░  ░  ░   ░  ░░ ░ ░░░ ░ ░   ░        ░         ░     ░░   ░  │
+// │       ░   ░  ░  ░   ░                 @2mdtln  ░  ░   ░      │
+// │                                                              │
+// ╚──────────────────────────────────────────────────────────────╝
 package main
 
 import (
@@ -15,6 +28,7 @@ import (
 type shutdownService struct {
 	shutdownHour   int
 	shutdownMinute int
+	shutdownChan   chan struct{}
 }
 
 type Config struct {
@@ -24,7 +38,7 @@ type Config struct {
 const defaultShutdownTime = "17:40"
 
 func loadConfig() string {
-	file, err := os.Open("config.json")
+	file, err := os.Open("C:\\Program Files (x86)\\Shutter\\config.json")
 	if err != nil {
 		return defaultShutdownTime
 	}
@@ -42,7 +56,6 @@ func (s *shutdownService) Execute(args []string, r <-chan svc.ChangeRequest, sta
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	statusChan <- svc.Status{State: svc.StartPending}
 
-	log.Println("Service is starting...")
 	statusChan <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
 	for {
@@ -52,12 +65,14 @@ func (s *shutdownService) Execute(args []string, r <-chan svc.ChangeRequest, sta
 			case svc.Interrogate:
 				statusChan <- changeRequest.CurrentStatus
 			case svc.Stop, svc.Shutdown:
-				log.Println("Service is stopping...")
 				statusChan <- svc.Status{State: svc.StopPending}
+				close(s.shutdownChan)
 				return false, 0
 			default:
 				log.Printf("Unexpected control request: %v", changeRequest.Cmd)
 			}
+		case <-s.shutdownChan:
+			return false, 0
 		default:
 			if s.shouldShutdown() {
 				exec.Command("shutdown", "/s", "/t", "0").Run()
@@ -82,7 +97,7 @@ func main() {
 	shutdownHour, shutdownMinute := parseShutdownTime(shutdownTime)
 
 	if isService {
-		svc.Run("ShutdownService", &shutdownService{shutdownHour, shutdownMinute})
+		svc.Run("ShutdownService", &shutdownService{shutdownHour, shutdownMinute, make(chan struct{})})
 		return
 	}
 
